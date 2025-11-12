@@ -3,7 +3,8 @@ import 'dotenv/config';
 import React from 'react';
 import { render, Box, Text } from 'ink';
 import si from 'systeminformation';
-import axios, { AxiosError } from 'axios';
+// @ts-expect-error - no type definitions available for osc package
+import osc from 'osc';
 import os from 'os';
 
 // Type definitions
@@ -39,20 +40,43 @@ interface CPUStats {
 interface SendResult {
   success: boolean;
   status: string;
-  statusCode?: number;
   error?: string;
   timestamp: string;
 }
 
 // Configuration
-const TARGET_URL = process.env.TARGET_URL;
+const OSC_HOST = process.env.OSC_HOST || 'localhost';
+const OSC_PORT = parseInt(process.env.OSC_PORT || '9877', 10);
 const INTERVAL_MS = parseInt(process.env.INTERVAL_MS || '10000', 10);
 
 // Validate configuration
-if (!TARGET_URL) {
-  console.error('ERROR: TARGET_URL not set in .env file');
-  console.error('Please create a .env file based on .env.example');
-  process.exit(1);
+if (!process.env.OSC_HOST && !process.env.OSC_PORT) {
+  console.error('WARNING: Using default OSC settings (localhost:9877)');
+  console.error('Set OSC_HOST and OSC_PORT in .env file for custom configuration');
+}
+
+// Initialize OSC UDP Port
+let oscPort: any = null;
+
+/**
+ * Initializes the OSC UDP port for sending messages
+ */
+function initializeOSC(): void {
+  oscPort = new osc.UDPPort({
+    localAddress: '0.0.0.0',
+    localPort: 0, // Use any available port for sending
+    metadata: true,
+  });
+
+  oscPort.on('ready', () => {
+    // OSC port is ready
+  });
+
+  oscPort.on('error', (error: any) => {
+    console.error(`OSC Error: ${error.message}`);
+  });
+
+  oscPort.open();
 }
 
 /**
@@ -93,40 +117,101 @@ async function collectCPUStats(): Promise<CPUStats> {
 }
 
 /**
- * Sends CPU statistics to the target server via HTTP POST
+ * Sends CPU statistics to the target via OSC over UDP
  * @param stats - CPU statistics object to send
  * @returns Send result with status and timestamp
  */
 async function sendStats(stats: CPUStats): Promise<SendResult> {
   try {
-    const response = await axios.post(TARGET_URL!, stats, {
-      headers: {
-        'Content-Type': 'application/json',
+    if (!oscPort) {
+      throw new Error('OSC port not initialized');
+    }
+
+    // Send main CPU usage metrics as separate OSC messages
+    oscPort.send(
+      {
+        address: '/cpu/usage/total',
+        args: [{ type: 'f', value: stats.usage.total }],
       },
-      timeout: 5000,
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    oscPort.send(
+      {
+        address: '/cpu/usage/user',
+        args: [{ type: 'f', value: stats.usage.user }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    oscPort.send(
+      {
+        address: '/cpu/usage/system',
+        args: [{ type: 'f', value: stats.usage.system }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    oscPort.send(
+      {
+        address: '/cpu/usage/idle',
+        args: [{ type: 'f', value: stats.usage.idle }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    // Send CPU info
+    oscPort.send(
+      {
+        address: '/cpu/info/model',
+        args: [{ type: 's', value: stats.cpu.model }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    oscPort.send(
+      {
+        address: '/cpu/info/cores',
+        args: [{ type: 'i', value: stats.cpu.cores }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
+
+    // Send per-core load (only total load for each core to keep messages minimal)
+    stats.perCore.forEach((core) => {
+      oscPort.send(
+        {
+          address: `/cpu/core/${core.core}/load`,
+          args: [{ type: 'f', value: core.load }],
+        },
+        OSC_HOST,
+        OSC_PORT
+      );
     });
+
+    // Send a bundle marker to indicate end of this batch
+    oscPort.send(
+      {
+        address: '/cpu/timestamp',
+        args: [{ type: 's', value: stats.timestamp }],
+      },
+      OSC_HOST,
+      OSC_PORT
+    );
 
     return {
       success: true,
       status: 'OK',
-      statusCode: response.status,
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    let errorMessage = 'Unknown error';
-
-    if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError;
-      if (axiosError.response) {
-        errorMessage = `HTTP ${axiosError.response.status}: ${axiosError.response.statusText}`;
-      } else if (axiosError.request) {
-        errorMessage = 'Network error - Unable to reach target';
-      } else {
-        errorMessage = axiosError.message;
-      }
-    } else if (error instanceof Error) {
-      errorMessage = error.message;
-    }
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     return {
       success: false,
@@ -151,6 +236,9 @@ function App(): React.ReactElement {
 
   React.useEffect(() => {
     let isMounted = true;
+
+    // Initialize OSC
+    initializeOSC();
 
     const monitor = async (): Promise<void> => {
       try {
@@ -189,6 +277,9 @@ function App(): React.ReactElement {
     return () => {
       isMounted = false;
       clearInterval(interval);
+      if (oscPort) {
+        oscPort.close();
+      }
     };
   }, []);
 
@@ -225,8 +316,8 @@ function App(): React.ReactElement {
       React.createElement(
         Text,
         null,
-        'Target: ',
-        React.createElement(Text, { color: 'blue' }, TARGET_URL)
+        'OSC Target: ',
+        React.createElement(Text, { color: 'blue' }, `${OSC_HOST}:${OSC_PORT}`)
       )
     ),
     React.createElement(
@@ -336,8 +427,7 @@ function App(): React.ReactElement {
           { bold: true, color: getStatusColor(lastSend.status) },
           lastSend.status
         ),
-        lastSend.statusCode &&
-          React.createElement(Text, { dimColor: true }, ` (HTTP ${lastSend.statusCode})`)
+        React.createElement(Text, { dimColor: true }, ' (OSC UDP)')
       ),
       lastSend.timestamp &&
         React.createElement(
@@ -367,6 +457,9 @@ const { unmount } = render(React.createElement(App));
 
 // Handle graceful shutdown
 const shutdown = (): void => {
+  if (oscPort) {
+    oscPort.close();
+  }
   unmount();
   process.exit(0);
 };

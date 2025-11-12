@@ -2,7 +2,7 @@
 
 A real-time CPU monitoring utility designed for **Ableton Live** and music production workflows. Monitor your system's CPU usage to identify performance bottlenecks before they cause audio dropouts or crashes during live performances and studio sessions.
 
-Built with TypeScript, featuring a beautiful terminal UI powered by Ink, and sends statistics via HTTP REST API to external monitoring systems.
+Built with TypeScript, featuring a beautiful terminal UI powered by Ink, and sends statistics via **OSC (Open Sound Control) over UDP**.
 
 ## Why SystemOSC?
 
@@ -11,8 +11,8 @@ When running Ableton Live with multiple tracks, plugins, and effects, CPU usage 
 - 🎛️ **Monitor CPU load in real-time** during live performances
 - 🚨 **Get early warnings** before hitting CPU limits that cause audio dropouts
 - 📊 **Track per-core utilization** to identify processing bottlenecks
-- 🔗 **Send data to external displays** (tablets, secondary computers, TouchOSC, etc.)
-- 📈 **Log performance metrics** for analyzing session demands
+- 🔗 **Send data via OSC** to visual displays, sequencers, or monitoring systems
+- 📈 **Integrate with OSC-enabled software** like TouchOSC, Max/MSP, Pure Data, etc.
 
 Perfect for live performers, studio producers, and anyone pushing their Mac's CPU limits with complex Ableton sessions.
 
@@ -24,9 +24,9 @@ Perfect for live performers, studio producers, and anyone pushing their Mac's CP
   - 🟢 Green: < 50% (safe zone)
   - 🟡 Yellow: 50-80% (caution - monitor closely)
   - 🔴 Red: > 80% (danger zone - reduce load)
-- **Configurable interval** - Default 10 seconds, adjustable for your needs
-- **HTTP POST with JSON** - Send data to any HTTP endpoint
+- **OSC over UDP** - Industry-standard protocol for real-time control and monitoring
 - **TypeScript** - Fully typed codebase for reliability
+- **Configurable interval** - Default 10 seconds, adjustable for your needs
 - **Error handling** - Comprehensive error reporting with visual feedback
 - **Connection status** - Real-time display of transmission status
 - **Graceful shutdown** - Clean exit with Ctrl+C
@@ -43,11 +43,9 @@ SystemOSC runs continuously and performs this cycle:
 
 2. **Display locally** - Updates the terminal UI with color-coded indicators showing current load levels
 
-3. **Send to target** - POSTs the data as JSON to your configured HTTP endpoint
+3. **Send via OSC** - Transmits data as OSC messages over UDP to your configured target
 
-4. **Show status** - Displays transmission result:
-   - ✅ OK (HTTP 200) - Successful transmission
-   - ❌ ERROR - Network or HTTP error with details
+4. **Show status** - Displays transmission result with timestamp
 
 5. **Wait and repeat** - Waits for the configured interval before next check
 
@@ -62,7 +60,7 @@ SystemOSC runs continuously and performs this cycle:
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/yourusername/systemosc.git
+git clone https://github.com/ktamas77/systemosc.git
 cd systemosc
 ```
 
@@ -78,10 +76,11 @@ npm install
 cp .env.example .env
 ```
 
-4. Edit `.env` and configure your target URL:
+4. Edit `.env` and configure your OSC target:
 
 ```env
-TARGET_URL=http://192.168.1.100:3000/cpu-stats
+OSC_HOST=localhost
+OSC_PORT=9877
 INTERVAL_MS=10000
 ```
 
@@ -113,168 +112,183 @@ npm run build
 
 This creates compiled JavaScript in the `dist/` directory.
 
-### Run Test Server
-
-To test locally, run the included test server:
-
-```bash
-npm run test-server 3000
-```
-
-Then in another terminal:
-
-```bash
-npm start
-```
-
 ## Configuration
 
 Edit the `.env` file:
 
-- **`TARGET_URL`** (required): HTTP endpoint where CPU stats will be sent via POST
+- **`OSC_HOST`** (required): Hostname or IP address of OSC receiver (default: localhost)
+- **`OSC_PORT`** (required): UDP port number for OSC messages (default: 9877)
 - **`INTERVAL_MS`** (optional): Interval in milliseconds (default: 10000 = 10 seconds)
 
 ### Example Configurations
 
 **Local testing:**
 ```env
-TARGET_URL=http://localhost:3000/cpu-stats
+OSC_HOST=localhost
+OSC_PORT=9877
 INTERVAL_MS=10000
+```
+
+**Send to another machine on network:**
+```env
+OSC_HOST=192.168.1.50
+OSC_PORT=9877
+INTERVAL_MS=5000
 ```
 
 **Send to iPad running TouchOSC:**
 ```env
-TARGET_URL=http://192.168.1.50:8080/cpu-stats
+OSC_HOST=192.168.1.100
+OSC_PORT=8000
 INTERVAL_MS=5000
 ```
 
-**Send to cloud monitoring:**
-```env
-TARGET_URL=https://monitoring.example.com/api/cpu-stats
-INTERVAL_MS=30000
+## OSC Message Format
+
+SystemOSC sends multiple OSC messages over UDP for each monitoring cycle. All numeric values are sent as floats (`f`) except where noted.
+
+### Main CPU Usage Messages
+
+| OSC Address | Type | Value Range | Description |
+|-------------|------|-------------|-------------|
+| `/cpu/usage/total` | float | 0.0-100.0 | **Primary metric** - Total CPU usage percentage |
+| `/cpu/usage/user` | float | 0.0-100.0 | User process CPU usage |
+| `/cpu/usage/system` | float | 0.0-100.0 | System/kernel CPU usage |
+| `/cpu/usage/idle` | float | 0.0-100.0 | Idle CPU percentage |
+
+### CPU Information Messages
+
+| OSC Address | Type | Description |
+|-------------|------|-------------|
+| `/cpu/info/model` | string | CPU model name (e.g., "Apple M1 Max") |
+| `/cpu/info/cores` | int | Total number of CPU cores |
+
+### Per-Core Load Messages
+
+| OSC Address | Type | Value Range | Description |
+|-------------|------|-------------|-------------|
+| `/cpu/core/0/load` | float | 0.0-100.0 | Core 0 total load |
+| `/cpu/core/1/load` | float | 0.0-100.0 | Core 1 total load |
+| `/cpu/core/N/load` | float | 0.0-100.0 | Core N total load |
+
+*One message per CPU core, where N = 0 to (cores - 1)*
+
+### Batch Marker
+
+| OSC Address | Type | Description |
+|-------------|------|-------------|
+| `/cpu/timestamp` | string | ISO 8601 timestamp marking end of message batch |
+
+### Example Message Sequence
+
+For a 10-core CPU at 46.45% total usage:
+
+```
+/cpu/usage/total     46.45
+/cpu/usage/user      28.44
+/cpu/usage/system    18.01
+/cpu/usage/idle      53.55
+/cpu/info/model      "Apple M1 Max"
+/cpu/info/cores      10
+/cpu/core/0/load     97.09
+/cpu/core/1/load     97.09
+/cpu/core/2/load     70.36
+/cpu/core/3/load     56.03
+/cpu/core/4/load     41.09
+/cpu/core/5/load     32.69
+/cpu/core/6/load     35.28
+/cpu/core/7/load     18.86
+/cpu/core/8/load     10.11
+/cpu/core/9/load     6.21
+/cpu/timestamp       "2025-11-12T01:23:45.789Z"
 ```
 
-## JSON Data Format
+## What to Monitor for Ableton Live
 
-The application sends POST requests with `Content-Type: application/json`.
+### Primary Metric: `/cpu/usage/total`
 
-### Complete JSON Structure
+Watch this value to know when you're approaching system limits:
 
-```json
-{
-  "timestamp": "2025-11-12T01:23:45.789Z",
-  "hostname": "MacBook-Pro.local",
-  "cpu": {
-    "model": "Apple M1 Max",
-    "cores": 10,
-    "speed": 2.4
-  },
-  "usage": {
-    "total": 46.45,
-    "user": 28.44,
-    "system": 18.01,
-    "idle": 53.55
-  },
-  "perCore": [
-    {
-      "core": 0,
-      "load": 97.09,
-      "loadUser": 65.12,
-      "loadSystem": 31.97,
-      "loadIdle": 2.91
-    },
-    {
-      "core": 1,
-      "load": 97.09,
-      "loadUser": 68.45,
-      "loadSystem": 28.64,
-      "loadIdle": 2.91
-    }
-    // ... one object per CPU core
-  ]
-}
-```
+- 🟢 **< 50%**: Safe zone - plenty of headroom
+- 🟡 **50-80%**: Caution - watch closely, consider freezing tracks
+- 🔴 **> 80%**: Danger zone - audio dropouts likely, reduce load immediately
 
-### Field Descriptions
+### Also Important: Per-Core Messages
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `timestamp` | string (ISO 8601) | UTC timestamp when data was collected |
-| `hostname` | string | System hostname |
-| `cpu.model` | string | CPU model name (e.g., "Apple M1 Max") |
-| `cpu.cores` | number | Total number of CPU cores |
-| `cpu.speed` | number | CPU clock speed in GHz |
-| `usage.total` | number | Total CPU usage percentage (0-100) |
-| `usage.user` | number | User process CPU usage (0-100) |
-| `usage.system` | number | System/kernel CPU usage (0-100) |
-| `usage.idle` | number | Idle CPU percentage (0-100) |
-| `perCore[]` | array | Per-core statistics (one per core) |
-| `perCore[].core` | number | Core index (0-based) |
-| `perCore[].load` | number | Total load on this core (0-100) |
-| `perCore[].loadUser` | number | User process load on this core (0-100) |
-| `perCore[].loadSystem` | number | System load on this core (0-100) |
-| `perCore[].loadIdle` | number | Idle percentage for this core (0-100) |
+Monitor individual cores (`/cpu/core/N/load`) because:
 
-**Notes:**
-- All percentage values are rounded to 2 decimal places
-- `usage.total` ≈ `usage.user` + `usage.system`
-- `usage.total` + `usage.idle` ≈ 100 (slight variance due to rounding)
-- The `perCore` array length equals `cpu.cores`
+- **Single-threaded plugins** can max out one core even when total CPU is only 50%
+- If any single core hits 95-100%, you can still get audio dropouts
+- Common with heavy synths (Serum, Omnisphere) or older plugins
+
+**Alert when:**
+- `/cpu/usage/total` > 80%
+- **OR** any `/cpu/core/N/load` > 95%
 
 ## Use Case: Monitoring Ableton Live
 
 ### Scenario 1: Live Performance
 
-Run SystemOSC on your performance laptop and send data to an iPad via HTTP. Display the CPU metrics using a simple web interface or TouchOSC, giving you a visual warning system before audio dropouts occur.
+Run SystemOSC on your performance laptop and send OSC to an iPad or secondary display running TouchOSC or similar. Get visual warnings before audio dropouts occur.
 
 ```env
-TARGET_URL=http://192.168.1.50:8080/cpu-stats
+OSC_HOST=192.168.1.50
+OSC_PORT=8000
 INTERVAL_MS=5000  # Check every 5 seconds during live performance
 ```
 
 ### Scenario 2: Studio Session Analysis
 
-Log CPU usage throughout a recording session to identify which tracks or plugins are CPU-heavy. Send data to a logging server that records performance over time.
+Send OSC data to Max/MSP, Pure Data, or custom software that logs performance over time to identify which tracks or plugins are CPU-heavy.
 
 ```env
-TARGET_URL=http://studio-server.local:3000/log-cpu
+OSC_HOST=localhost
+OSC_PORT=9877
 INTERVAL_MS=10000
 ```
 
-### Scenario 3: Real-time Visual Display
+### Scenario 3: Visual Feedback Integration
 
-Connect SystemOSC to a visualizer running on a secondary monitor, showing real-time CPU graphs as you build your Ableton session. Helps you make informed decisions about when to freeze tracks or simplify effects chains.
+Connect SystemOSC to visual software that changes colors/patterns based on CPU load, giving you ambient awareness of system health while producing.
 
-## Example: Custom Receiving Server
+## Integration Examples
 
-Here's a minimal Express.js server to receive and process the data:
+### TouchOSC
 
-```typescript
-import express from 'express';
+Create a simple layout with:
+- A label receiving `/cpu/usage/total` - shows main CPU percentage
+- A radial indicator mapped to `/cpu/usage/total` - visual gauge
+- Multiple bar graphs for `/cpu/core/0/load` through `/cpu/core/9/load`
+- Color script: green < 50%, yellow 50-80%, red > 80%
 
-const app = express();
-app.use(express.json());
+### Max/MSP
 
-app.post('/cpu-stats', (req, res) => {
-  const { timestamp, hostname, cpu, usage } = req.body;
+```maxpat
+[udpreceive 9877]
+|
+[route /cpu/usage/total /cpu/core/0/load]
+|                    |
+[scale 0 100 0 1]    [scale 0 100 0 1]
+|                    |
+[> 0.8]              [> 0.95]
+|                    |
+[sel 1]              [sel 1]
+|                    |
+[bang]               [bang]
+|                    |
+"HIGH CPU!"          "CORE 0 MAXED!"
+```
 
-  // Check if CPU is getting dangerously high
-  if (usage.total > 80) {
-    console.warn(`⚠️  HIGH CPU: ${usage.total}% on ${hostname}`);
-    // Trigger alert, send notification, etc.
-  }
+### Pure Data
 
-  console.log(`[${new Date(timestamp).toLocaleTimeString()}] ${hostname}`);
-  console.log(`CPU: ${usage.total}% (${cpu.model})`);
-
-  // Store in database, forward to monitoring system, etc.
-
-  res.status(200).json({ status: 'ok' });
-});
-
-app.listen(3000, () => {
-  console.log('CPU stats receiver listening on port 3000');
-});
+```pd
+[netreceive -u -b 9877]
+|
+[oscparse]
+|
+[route /cpu/usage/total]
+|
+[print CPU]
 ```
 
 ## Development
@@ -284,8 +298,8 @@ app.listen(3000, () => {
 ```
 systemosc/
 ├── src/
-│   ├── index.ts          # Main application
-│   └── test-server.ts    # Test HTTP server
+│   ├── index.ts          # Main application with OSC sender
+│   └── test-server.ts    # Test HTTP server (deprecated)
 ├── dist/                 # Compiled TypeScript output
 ├── .env                  # Your configuration (not in git)
 ├── .env.example          # Configuration template
@@ -298,33 +312,34 @@ systemosc/
 - `npm start` - Run the app with tsx (development)
 - `npm run dev` - Run with auto-reload on file changes
 - `npm run build` - Compile TypeScript to JavaScript
-- `npm run test-server` - Run the test HTTP server
 - `npm run typecheck` - Check types without building
 
 ### TypeScript
 
-This project is fully typed with TypeScript for better reliability and developer experience. All CPU statistics and HTTP communication have proper type definitions.
+This project is fully typed with TypeScript for better reliability and developer experience. All CPU statistics and OSC communication have proper type definitions.
 
 ## Troubleshooting
 
-**"TARGET_URL not set in .env file"**
-- Create a `.env` file in the project root
-- Copy from `.env.example` and add your target URL
+**"WARNING: Using default OSC settings"**
+- This is just informational - it will use localhost:9877
+- Set `OSC_HOST` and `OSC_PORT` in `.env` to suppress warning
 
-**"Network error - Unable to reach target"**
-- Verify the target URL is correct and accessible
-- Check that the target server is running
-- Ensure firewall settings allow the connection
-- Test with `curl -X POST http://your-target/cpu-stats -H "Content-Type: application/json" -d "{}"`
-
-**"HTTP Error 404" or other HTTP errors**
-- Verify the endpoint path is correct
-- Check that the target server has the correct route configured
-- Ensure the server accepts POST requests with JSON
+**Messages not received**
+- Verify the OSC receiver is listening on the correct port
+- Check firewall settings allow UDP traffic
+- Use Wireshark or `tcpdump` to verify UDP packets are being sent:
+  ```bash
+  sudo tcpdump -i any -n udp port 9877
+  ```
 
 **High CPU usage from SystemOSC itself**
 - Increase `INTERVAL_MS` to reduce monitoring frequency
 - The monitoring overhead is typically < 1% CPU
+
+**Single core at 100% but total shows 50%**
+- This is normal and expected - one plugin is maxing out one core
+- In Ableton: freeze that track or reduce the plugin's quality/oversampling
+- This is why monitoring per-core load is important!
 
 ## Contributing
 
@@ -337,3 +352,5 @@ ISC
 ## Acknowledgments
 
 Built for the Ableton Live community and music producers everywhere who need reliable performance monitoring.
+
+OSC protocol support enables integration with industry-standard creative coding tools and control surfaces.
