@@ -91,6 +91,7 @@ OSC_PORT=9877
 HTTP_ENABLED=true
 HTTP_PORT=3000
 
+# Monitoring interval in milliseconds (default: 10000 = 10 seconds)
 INTERVAL_MS=10000
 ```
 
