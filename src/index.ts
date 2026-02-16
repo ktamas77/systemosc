@@ -6,6 +6,7 @@ import si from 'systeminformation';
 // @ts-expect-error - no type definitions available for osc package
 import osc from 'osc';
 import os from 'os';
+import http from 'http';
 
 // Type definitions
 interface CPUInfo {
@@ -45,18 +46,32 @@ interface SendResult {
 }
 
 // Configuration
+const OSC_ENABLED = process.env.OSC_ENABLED !== 'false';
 const OSC_HOST = process.env.OSC_HOST || 'localhost';
 const OSC_PORT = parseInt(process.env.OSC_PORT || '9877', 10);
+const HTTP_ENABLED = process.env.HTTP_ENABLED === 'true';
+const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3000', 10);
 const INTERVAL_MS = parseInt(process.env.INTERVAL_MS || '10000', 10);
 
 // Validate configuration
-if (!process.env.OSC_HOST && !process.env.OSC_PORT) {
+if (!OSC_ENABLED && !HTTP_ENABLED) {
+  console.error('WARNING: Neither OSC nor HTTP is enabled. Enable at least one output method.');
+  console.error('Set OSC_ENABLED=true and/or HTTP_ENABLED=true in .env file');
+}
+
+if (OSC_ENABLED && !process.env.OSC_HOST && !process.env.OSC_PORT) {
   console.error('WARNING: Using default OSC settings (localhost:9877)');
   console.error('Set OSC_HOST and OSC_PORT in .env file for custom configuration');
 }
 
+// Latest stats for HTTP server
+let latestStats: CPUStats | null = null;
+
 // Initialize OSC UDP Port
 let oscPort: any = null;
+
+// HTTP server instance
+let httpServer: http.Server | null = null;
 
 /**
  * Initializes the OSC UDP port for sending messages
@@ -77,6 +92,46 @@ function initializeOSC(): void {
   });
 
   oscPort.open();
+}
+
+/**
+ * Converts CPU stats to a JSON array of name-value pairs matching the OSC message format
+ */
+function statsToJson(stats: CPUStats): Array<{ name: string; value: string | number }> {
+  const messages: Array<{ name: string; value: string | number }> = [
+    { name: '/cpu/usage/total', value: stats.usage.total },
+    { name: '/cpu/usage/user', value: stats.usage.user },
+    { name: '/cpu/usage/system', value: stats.usage.system },
+    { name: '/cpu/usage/idle', value: stats.usage.idle },
+    { name: '/cpu/info/model', value: stats.cpu.model },
+    { name: '/cpu/info/cores', value: stats.cpu.cores },
+  ];
+
+  stats.perCore.forEach((core) => {
+    messages.push({ name: `/cpu/core/${core.core}/load`, value: core.load });
+  });
+
+  messages.push({ name: '/cpu/timestamp', value: stats.timestamp });
+
+  return messages;
+}
+
+/**
+ * Initializes the HTTP server for serving CPU stats as JSON
+ */
+function initializeHTTP(): void {
+  httpServer = http.createServer((_req, res) => {
+    if (!latestStats) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No data available yet' }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(statsToJson(latestStats)));
+  });
+
+  httpServer.listen(HTTP_PORT);
 }
 
 /**
@@ -122,6 +177,17 @@ async function collectCPUStats(): Promise<CPUStats> {
  * @returns Send result with status and timestamp
  */
 async function sendStats(stats: CPUStats): Promise<SendResult> {
+  // Update latest stats for HTTP server
+  latestStats = stats;
+
+  if (!OSC_ENABLED) {
+    return {
+      success: true,
+      status: 'OK',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   try {
     if (!oscPort) {
       throw new Error('OSC port not initialized');
@@ -237,8 +303,13 @@ function App(): React.ReactElement {
   React.useEffect(() => {
     let isMounted = true;
 
-    // Initialize OSC
-    initializeOSC();
+    // Initialize outputs
+    if (OSC_ENABLED) {
+      initializeOSC();
+    }
+    if (HTTP_ENABLED) {
+      initializeHTTP();
+    }
 
     const monitor = async (): Promise<void> => {
       try {
@@ -280,6 +351,9 @@ function App(): React.ReactElement {
       if (oscPort) {
         oscPort.close();
       }
+      if (httpServer) {
+        httpServer.close();
+      }
     };
   }, []);
 
@@ -310,110 +384,107 @@ function App(): React.ReactElement {
       React.createElement(Text, { bold: true, color: 'cyan' }, 'SystemOSC - CPU Monitor for Ableton Live')
     ),
     // Target Info
-    React.createElement(
-      Box,
-      { marginBottom: 1 },
+    OSC_ENABLED &&
       React.createElement(
-        Text,
+        Box,
         null,
-        'OSC Target: ',
-        React.createElement(Text, { color: 'blue' }, `${OSC_HOST}:${OSC_PORT}`)
-      )
-    ),
+        React.createElement(
+          Text,
+          null,
+          'OSC Target: ',
+          React.createElement(Text, { color: 'blue' }, `${OSC_HOST}:${OSC_PORT}`)
+        )
+      ),
+    HTTP_ENABLED &&
+      React.createElement(
+        Box,
+        null,
+        React.createElement(
+          Text,
+          null,
+          'HTTP Server: ',
+          React.createElement(Text, { color: 'blue' }, `http://localhost:${HTTP_PORT}/`)
+        )
+      ),
+    React.createElement(Box, { marginBottom: 1 }),
     React.createElement(
       Box,
       { marginBottom: 1 },
-      React.createElement(
-        Text,
-        { dimColor: true },
-        `Interval: ${INTERVAL_MS / 1000}s | Hostname: ${os.hostname()}`
-      )
+      React.createElement(Text, { dimColor: true }, `Interval: ${INTERVAL_MS / 1000}s | Hostname: ${os.hostname()}`)
     ),
     // Divider
-    React.createElement(
-      Box,
-      { marginBottom: 1 },
-      React.createElement(Text, { dimColor: true }, '─'.repeat(60))
-    ),
+    React.createElement(Box, { marginBottom: 1 }, React.createElement(Text, { dimColor: true }, '─'.repeat(60))),
     // CPU Stats
     isLoading
-      ? React.createElement(
-          Box,
-          null,
-          React.createElement(Text, { color: 'yellow' }, 'Loading CPU statistics...')
-        )
+      ? React.createElement(Box, null, React.createElement(Text, { color: 'yellow' }, 'Loading CPU statistics...'))
       : cpuStats
-      ? React.createElement(
-          Box,
-          { flexDirection: 'column', marginBottom: 1 },
-          React.createElement(
+        ? React.createElement(
             Box,
-            { marginBottom: 1 },
-            React.createElement(
-              Text,
-              { bold: true },
-              'CPU: ',
-              React.createElement(Text, { dimColor: true }, cpuStats.cpu.model),
-              ' ',
-              React.createElement(
-                Text,
-                { dimColor: true },
-                `(${cpuStats.cpu.cores} cores @ ${cpuStats.cpu.speed} GHz)`
-              )
-            )
-          ),
-          React.createElement(
-            Box,
-            { flexDirection: 'column' },
+            { flexDirection: 'column', marginBottom: 1 },
             React.createElement(
               Box,
-              null,
-              React.createElement(Text, null, 'Total:  '),
+              { marginBottom: 1 },
               React.createElement(
                 Text,
-                { bold: true, color: getUsageColor(cpuStats.usage.total) },
-                `${cpuStats.usage.total.toFixed(2)}%`
+                { bold: true },
+                'CPU: ',
+                React.createElement(Text, { dimColor: true }, cpuStats.cpu.model),
+                ' ',
+                React.createElement(
+                  Text,
+                  { dimColor: true },
+                  `(${cpuStats.cpu.cores} cores @ ${cpuStats.cpu.speed} GHz)`
+                )
               )
             ),
             React.createElement(
               Box,
-              null,
-              React.createElement(Text, null, 'User:   '),
+              { flexDirection: 'column' },
               React.createElement(
-                Text,
-                { color: getUsageColor(cpuStats.usage.user) },
-                `${cpuStats.usage.user.toFixed(2)}%`
-              )
-            ),
-            React.createElement(
-              Box,
-              null,
-              React.createElement(Text, null, 'System: '),
+                Box,
+                null,
+                React.createElement(Text, null, 'Total:  '),
+                React.createElement(
+                  Text,
+                  { bold: true, color: getUsageColor(cpuStats.usage.total) },
+                  `${cpuStats.usage.total.toFixed(2)}%`
+                )
+              ),
               React.createElement(
-                Text,
-                { color: getUsageColor(cpuStats.usage.system) },
-                `${cpuStats.usage.system.toFixed(2)}%`
+                Box,
+                null,
+                React.createElement(Text, null, 'User:   '),
+                React.createElement(
+                  Text,
+                  { color: getUsageColor(cpuStats.usage.user) },
+                  `${cpuStats.usage.user.toFixed(2)}%`
+                )
+              ),
+              React.createElement(
+                Box,
+                null,
+                React.createElement(Text, null, 'System: '),
+                React.createElement(
+                  Text,
+                  { color: getUsageColor(cpuStats.usage.system) },
+                  `${cpuStats.usage.system.toFixed(2)}%`
+                )
+              ),
+              React.createElement(
+                Box,
+                null,
+                React.createElement(Text, null, 'Idle:   '),
+                React.createElement(Text, { color: 'gray' }, `${cpuStats.usage.idle.toFixed(2)}%`)
               )
-            ),
-            React.createElement(
-              Box,
-              null,
-              React.createElement(Text, null, 'Idle:   '),
-              React.createElement(Text, { color: 'gray' }, `${cpuStats.usage.idle.toFixed(2)}%`)
             )
           )
-        )
-      : React.createElement(
-          Box,
-          { marginBottom: 1 },
-          React.createElement(Text, { color: 'red' }, 'No CPU data available')
-        ),
+        : React.createElement(
+            Box,
+            { marginBottom: 1 },
+            React.createElement(Text, { color: 'red' }, 'No CPU data available')
+          ),
     // Divider
-    React.createElement(
-      Box,
-      { marginBottom: 1 },
-      React.createElement(Text, { dimColor: true }, '─'.repeat(60))
-    ),
+    React.createElement(Box, { marginBottom: 1 }, React.createElement(Text, { dimColor: true }, '─'.repeat(60))),
     // Last Send Status
     React.createElement(
       Box,
@@ -422,12 +493,12 @@ function App(): React.ReactElement {
         Box,
         null,
         React.createElement(Text, null, 'Last Send: '),
+        React.createElement(Text, { bold: true, color: getStatusColor(lastSend.status) }, lastSend.status),
         React.createElement(
           Text,
-          { bold: true, color: getStatusColor(lastSend.status) },
-          lastSend.status
-        ),
-        React.createElement(Text, { dimColor: true }, ' (OSC UDP)')
+          { dimColor: true },
+          ` (${[OSC_ENABLED && 'OSC UDP', HTTP_ENABLED && 'HTTP'].filter(Boolean).join(' + ')})`
+        )
       ),
       lastSend.timestamp &&
         React.createElement(
@@ -444,11 +515,7 @@ function App(): React.ReactElement {
         )
     ),
     // Footer
-    React.createElement(
-      Box,
-      { marginTop: 1 },
-      React.createElement(Text, { dimColor: true }, 'Press Ctrl+C to exit')
-    )
+    React.createElement(Box, { marginTop: 1 }, React.createElement(Text, { dimColor: true }, 'Press Ctrl+C to exit'))
   );
 }
 
@@ -459,6 +526,9 @@ const { unmount } = render(React.createElement(App));
 const shutdown = (): void => {
   if (oscPort) {
     oscPort.close();
+  }
+  if (httpServer) {
+    httpServer.close();
   }
   unmount();
   process.exit(0);

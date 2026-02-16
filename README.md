@@ -2,7 +2,7 @@
 
 A real-time CPU monitoring utility designed for **Ableton Live** and music production workflows. Monitor your system's CPU usage to identify performance bottlenecks before they cause audio dropouts or crashes during live performances and studio sessions.
 
-Built with TypeScript, featuring a beautiful terminal UI powered by Ink, and sends statistics via **OSC (Open Sound Control) over UDP**.
+Built with TypeScript, featuring a beautiful terminal UI powered by Ink. Supports two output modes: **OSC (Open Sound Control) over UDP** and an **HTTP JSON server** — both independently configurable.
 
 ## Why SystemOSC?
 
@@ -12,6 +12,7 @@ When running Ableton Live with multiple tracks, plugins, and effects, CPU usage 
 - 🚨 **Get early warnings** before hitting CPU limits that cause audio dropouts
 - 📊 **Track per-core utilization** to identify processing bottlenecks
 - 🔗 **Send data via OSC** to visual displays, sequencers, or monitoring systems
+- 🌐 **HTTP JSON API** for easy integration with web dashboards and custom tools
 - 📈 **Integrate with OSC-enabled software** like TouchOSC, Max/MSP, Pure Data, etc.
 
 Perfect for live performers, studio producers, and anyone pushing their Mac's CPU limits with complex Ableton sessions.
@@ -25,6 +26,8 @@ Perfect for live performers, studio producers, and anyone pushing their Mac's CP
   - 🟡 Yellow: 50-80% (caution - monitor closely)
   - 🔴 Red: > 80% (danger zone - reduce load)
 - **OSC over UDP** - Industry-standard protocol for real-time control and monitoring
+- **HTTP JSON API** - Query CPU stats via HTTP; returns JSON array of name-value pairs
+- **Flexible output modes** - Enable OSC, HTTP, or both independently
 - **TypeScript** - Fully typed codebase for reliability
 - **Configurable interval** - Default 10 seconds, adjustable for your needs
 - **Error handling** - Comprehensive error reporting with visual feedback
@@ -43,7 +46,7 @@ SystemOSC runs continuously and performs this cycle:
 
 2. **Display locally** - Updates the terminal UI with color-coded indicators showing current load levels
 
-3. **Send via OSC** - Transmits data as OSC messages over UDP to your configured target
+3. **Send via OSC and/or serve via HTTP** - Transmits data as OSC messages over UDP and/or serves it as JSON over HTTP (depending on configuration)
 
 4. **Show status** - Displays transmission result with timestamp
 
@@ -76,11 +79,18 @@ npm install
 cp .env.example .env
 ```
 
-4. Edit `.env` and configure your OSC target:
+4. Edit `.env` and configure your output mode(s):
 
 ```env
+# Enable OSC output (default: true)
+OSC_ENABLED=true
 OSC_HOST=localhost
 OSC_PORT=9877
+
+# Enable HTTP JSON server (default: false)
+HTTP_ENABLED=true
+HTTP_PORT=3000
+
 INTERVAL_MS=10000
 ```
 
@@ -116,28 +126,58 @@ This creates compiled JavaScript in the `dist/` directory.
 
 Edit the `.env` file:
 
-- **`OSC_HOST`** (required): Hostname or IP address of OSC receiver (default: localhost)
-- **`OSC_PORT`** (required): UDP port number for OSC messages (default: 9877)
-- **`INTERVAL_MS`** (optional): Interval in milliseconds (default: 10000 = 10 seconds)
+### Output Modes
+
+- **`OSC_ENABLED`** (optional): Enable OSC UDP output (default: `true`)
+- **`HTTP_ENABLED`** (optional): Enable HTTP JSON server (default: `false`)
+
+At least one output mode should be enabled.
+
+### OSC Settings (when `OSC_ENABLED=true`)
+
+- **`OSC_HOST`** (optional): Hostname or IP address of OSC receiver (default: `localhost`)
+- **`OSC_PORT`** (optional): UDP port number for OSC messages (default: `9877`)
+
+### HTTP Settings (when `HTTP_ENABLED=true`)
+
+- **`HTTP_PORT`** (optional): Port for the HTTP server (default: `3000`)
+
+### General
+
+- **`INTERVAL_MS`** (optional): Monitoring interval in milliseconds (default: `10000` = 10 seconds)
 
 ### Example Configurations
 
-**Local testing:**
+**OSC only (default):**
 ```env
+OSC_ENABLED=true
+HTTP_ENABLED=false
 OSC_HOST=localhost
 OSC_PORT=9877
 INTERVAL_MS=10000
 ```
 
-**Send to another machine on network:**
+**HTTP only:**
 ```env
+OSC_ENABLED=false
+HTTP_ENABLED=true
+HTTP_PORT=3000
+INTERVAL_MS=5000
+```
+
+**Both OSC and HTTP:**
+```env
+OSC_ENABLED=true
+HTTP_ENABLED=true
 OSC_HOST=192.168.1.50
 OSC_PORT=9877
+HTTP_PORT=8080
 INTERVAL_MS=5000
 ```
 
 **Send to iPad running TouchOSC:**
 ```env
+OSC_ENABLED=true
 OSC_HOST=192.168.1.100
 OSC_PORT=8000
 INTERVAL_MS=5000
@@ -201,6 +241,48 @@ For a 10-core CPU at 46.45% total usage:
 /cpu/core/8/load     10.11
 /cpu/core/9/load     6.21
 /cpu/timestamp       "2025-11-12T01:23:45.789Z"
+```
+
+## HTTP JSON API
+
+When `HTTP_ENABLED=true`, SystemOSC runs an HTTP server that responds to any `GET` request with the latest CPU stats as a JSON array of name-value pairs. The data mirrors the OSC messages exactly.
+
+### Endpoint
+
+```
+GET http://localhost:{HTTP_PORT}/
+```
+
+### Response Format
+
+```json
+[
+  { "name": "/cpu/usage/total", "value": 46.45 },
+  { "name": "/cpu/usage/user", "value": 28.44 },
+  { "name": "/cpu/usage/system", "value": 18.01 },
+  { "name": "/cpu/usage/idle", "value": 53.55 },
+  { "name": "/cpu/info/model", "value": "Apple M1 Max" },
+  { "name": "/cpu/info/cores", "value": 10 },
+  { "name": "/cpu/core/0/load", "value": 97.09 },
+  { "name": "/cpu/core/1/load", "value": 97.09 },
+  { "name": "/cpu/core/2/load", "value": 70.36 },
+  { "name": "/cpu/core/3/load", "value": 56.03 },
+  { "name": "/cpu/core/4/load", "value": 41.09 },
+  { "name": "/cpu/core/5/load", "value": 32.69 },
+  { "name": "/cpu/core/6/load", "value": 35.28 },
+  { "name": "/cpu/core/7/load", "value": 18.86 },
+  { "name": "/cpu/core/8/load", "value": 10.11 },
+  { "name": "/cpu/core/9/load", "value": 6.21 },
+  { "name": "/cpu/timestamp", "value": "2025-11-12T01:23:45.789Z" }
+]
+```
+
+Returns HTTP 503 with `{"error": "No data available yet"}` if no monitoring cycle has completed yet.
+
+### Example Usage
+
+```bash
+curl http://localhost:3000/
 ```
 
 ## What to Monitor for Ableton Live
@@ -298,7 +380,7 @@ Create a simple layout with:
 ```
 systemosc/
 ├── src/
-│   ├── index.ts          # Main application with OSC sender
+│   ├── index.ts          # Main application with OSC sender and HTTP server
 │   └── test-server.ts    # Test HTTP server (deprecated)
 ├── dist/                 # Compiled TypeScript output
 ├── .env                  # Your configuration (not in git)
