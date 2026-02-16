@@ -403,7 +403,7 @@ function App(): React.ReactElement {
           Text,
           null,
           'HTTP Server: ',
-          React.createElement(Text, { color: 'blue' }, `http://localhost:${HTTP_PORT}/`)
+          React.createElement(Text, { color: 'blue' }, `http://0.0.0.0:${HTTP_PORT}/`)
         )
       ),
     React.createElement(Box, { marginBottom: 1 }),
