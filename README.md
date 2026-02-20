@@ -374,6 +374,99 @@ Create a simple layout with:
 [print CPU]
 ```
 
+## Daemon Mode
+
+SystemOSC can run as a headless background daemon without the terminal UI. This is useful for running as a service, in scripts, or piping output to log files.
+
+```bash
+# Run in daemon mode (logs one line per cycle to stdout)
+npx tsx src/index.ts --daemon
+
+# Or via npm script
+npm run daemon
+```
+
+Daemon output format:
+```
+[14:32:05] CPU: 45.2% | Send: OK
+[14:32:15] CPU: 38.7% | Send: OK
+```
+
+Daemon mode supports all the same `.env` configuration (OSC, HTTP, interval) as the interactive UI. Press `Ctrl+C` to stop.
+
+## Auto-Start as macOS Service (Optional)
+
+On macOS, you can install SystemOSC as a LaunchAgent that starts automatically at login. This is entirely optional and uses the standard macOS `launchctl` system.
+
+### Requirements
+
+- **macOS** (LaunchAgents are a macOS feature)
+- **Node.js** installed and available in your PATH
+- **Xcode Command Line Tools** (only if installing the menu bar app): `xcode-select --install`
+
+### Install
+
+```bash
+# Install daemon + menu bar app (requires swiftc)
+npm run service:install
+
+# Install daemon only (no menu bar app, no Xcode needed)
+npm run service:install:no-menubar
+```
+
+The install script will:
+1. Build the TypeScript project (`npm run build`)
+2. Resolve your `node` binary path
+3. Generate LaunchAgent plists from templates
+4. Optionally compile the native Swift menu bar app
+5. Load the LaunchAgent(s) via `launchctl`
+
+### Uninstall
+
+```bash
+npm run service:uninstall
+```
+
+This stops the running services and removes the LaunchAgent plist files.
+
+### Check Status
+
+```bash
+npm run service:status
+```
+
+### View Logs
+
+```bash
+npm run service:logs
+```
+
+Log file location: `~/Library/Logs/systemosc.log`
+
+### Menu Bar App (Optional, macOS only)
+
+When installed with the menu bar option, a native macOS menu bar icon appears showing:
+
+- **CPU percentage** in the menu bar (e.g., "CPU 45%")
+- **Color-coded**: green (<50%), orange/yellow (50-80%), red (>80%)
+- **Dropdown menu**: per-core load bars, "View Logs", "Quit"
+
+The menu bar app polls the SystemOSC HTTP API, so `HTTP_ENABLED=true` must be set in your `.env` file.
+
+The menu bar app runs as an accessory (no Dock icon) and has its own LaunchAgent (`com.systemosc.menubar`).
+
+### How It Works
+
+The service uses macOS LaunchAgents (per-user, no root required):
+
+| File | Purpose |
+|------|---------|
+| `com.systemosc.agent.plist` | Template for the daemon LaunchAgent |
+| `com.systemosc.menubar.plist` | Template for the menu bar LaunchAgent |
+| `scripts/service.sh` | Generates plists from templates, manages launchctl |
+
+The templates contain placeholder tokens (`__NODE_PATH__`, `__PROJECT_DIR__`, `__HOME__`) that are replaced with actual paths at install time. The generated plists are placed in `~/Library/LaunchAgents/` (not committed to the repo).
+
 ## Development
 
 ### Project Structure
@@ -383,6 +476,12 @@ systemosc/
 ├── src/
 │   ├── index.ts          # Main application with OSC sender and HTTP server
 │   └── test-server.ts    # Test HTTP server (deprecated)
+├── menubar/
+│   └── SystemOSCMenu.swift   # Native macOS menu bar app (optional)
+├── scripts/
+│   └── service.sh        # macOS LaunchAgent install/uninstall script
+├── com.systemosc.agent.plist      # LaunchAgent template (daemon)
+├── com.systemosc.menubar.plist    # LaunchAgent template (menu bar)
 ├── dist/                 # Compiled TypeScript output
 ├── .env                  # Your configuration (not in git)
 ├── .env.example          # Configuration template
@@ -396,6 +495,12 @@ systemosc/
 - `npm run dev` - Run with auto-reload on file changes
 - `npm run build` - Compile TypeScript to JavaScript
 - `npm run typecheck` - Check types without building
+- `npm run daemon` - Run in headless daemon mode (no terminal UI)
+- `npm run service:install` - Build and install as macOS LaunchAgent (with menu bar)
+- `npm run service:install:no-menubar` - Install daemon only (no menu bar app)
+- `npm run service:uninstall` - Stop and remove all LaunchAgents
+- `npm run service:status` - Show service status
+- `npm run service:logs` - Tail the daemon log file
 
 ### TypeScript
 

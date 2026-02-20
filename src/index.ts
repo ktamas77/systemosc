@@ -519,20 +519,63 @@ function App(): React.ReactElement {
   );
 }
 
-// Render the app
-const { unmount } = render(React.createElement(App));
+// Check for --daemon flag
+const isDaemon = process.argv.includes('--daemon');
 
-// Handle graceful shutdown
-const shutdown = (): void => {
-  if (oscPort) {
-    oscPort.close();
+if (isDaemon) {
+  // Headless daemon mode — no terminal UI, logs to stdout
+  if (OSC_ENABLED) {
+    initializeOSC();
   }
-  if (httpServer) {
-    httpServer.close();
+  if (HTTP_ENABLED) {
+    initializeHTTP();
   }
-  unmount();
-  process.exit(0);
-};
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+  const daemonLoop = async (): Promise<void> => {
+    try {
+      const stats = await collectCPUStats();
+      const result = await sendStats(stats);
+      const time = new Date().toLocaleTimeString();
+      const status = result.success ? 'OK' : `ERR: ${result.error}`;
+      console.log(`[${time}] CPU: ${stats.usage.total.toFixed(1)}% | Send: ${status}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[${new Date().toLocaleTimeString()}] Error: ${msg}`);
+    }
+  };
+
+  daemonLoop();
+  const interval = setInterval(daemonLoop, INTERVAL_MS);
+
+  const shutdown = (): void => {
+    clearInterval(interval);
+    if (oscPort) {
+      oscPort.close();
+    }
+    if (httpServer) {
+      httpServer.close();
+    }
+    console.log('SystemOSC daemon stopped.');
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+} else {
+  // Interactive terminal UI mode (default)
+  const { unmount } = render(React.createElement(App));
+
+  const shutdown = (): void => {
+    if (oscPort) {
+      oscPort.close();
+    }
+    if (httpServer) {
+      httpServer.close();
+    }
+    unmount();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}

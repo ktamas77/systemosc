@@ -16,7 +16,13 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
-    "prepare": "husky"
+    "prepare": "husky",
+    "daemon": "tsx src/index.ts --daemon",
+    "service:install": "./scripts/service.sh install",
+    "service:install:no-menubar": "./scripts/service.sh install --no-menubar",
+    "service:uninstall": "./scripts/service.sh uninstall",
+    "service:status": "./scripts/service.sh status",
+    "service:logs": "./scripts/service.sh logs"
   },
   "lint-staged": {
     "*.ts": [

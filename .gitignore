@@ -5,3 +5,6 @@ dist/
 .DS_Store
 *.log
 .claude/
+
+# Compiled menu bar binary (macOS)
+menubar/SystemOSCMenu
